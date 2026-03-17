@@ -10,13 +10,14 @@ A lightweight native macOS menu bar app that draws a configurable highlight arou
 - **Toolbox UI** — Full settings window with live preview, accessible from the menu bar
 - **Customizable** — Shape, size, fill/border color, opacity, border width, click effect and color
 - **Persistent settings** — Toolbox changes are saved automatically and restored on next launch
+- **Global hotkey** — Toggle highlight with Ctrl+Shift+T from anywhere, no need to focus the app
 - **Lightweight** — Native Swift, no dependencies, runs as a menu bar app with no dock icon
 
 ## Requirements
 
 - macOS 13.0 (Ventura) or later
 - Swift 5.9+
-- Accessibility permissions (prompted on first launch)
+- Accessibility permissions (for global mouse tracking)
 
 ## Build & Install
 
@@ -49,7 +50,13 @@ swift build -c release
    - **Toggle Highlight** (Ctrl+Shift+T) — show/hide the highlight
    - **Toolbox...** — open the settings window
    - **Quit** — exit the app
-3. Use the Toolbox to customize shape, colors, size, and click effects — changes apply live
+3. Use the Toolbox to customize shape, colors, size, and click effects — changes apply live and persist across restarts
+
+### Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| Ctrl+Shift+T | Toggle highlight on/off (global, works from any app) |
 
 ## Presets
 
