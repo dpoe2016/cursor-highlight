@@ -70,6 +70,62 @@ class HighlightConfig {
         c.showClickEffect = showClickEffect
         return c
     }
+
+    // MARK: Persistence
+
+    private static let defaults = UserDefaults.standard
+
+    private static func colorToHex(_ color: NSColor) -> String {
+        let c = color.usingColorSpace(.sRGB) ?? color
+        return String(format: "#%02X%02X%02X",
+                      Int(c.redComponent * 255),
+                      Int(c.greenComponent * 255),
+                      Int(c.blueComponent * 255))
+    }
+
+    private static func hexToColor(_ hex: String) -> NSColor? {
+        var h = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if h.hasPrefix("#") { h.removeFirst() }
+        guard h.count == 6, let val = UInt64(h, radix: 16) else { return nil }
+        let r = CGFloat((val >> 16) & 0xFF) / 255.0
+        let g = CGFloat((val >> 8) & 0xFF) / 255.0
+        let b = CGFloat(val & 0xFF) / 255.0
+        return NSColor(srgbRed: r, green: g, blue: b, alpha: 1.0)
+    }
+
+    func save() {
+        let d = HighlightConfig.defaults
+        d.set(shape.rawValue, forKey: "shape")
+        d.set(Double(radius), forKey: "radius")
+        d.set(HighlightConfig.colorToHex(fillColor), forKey: "fillColor")
+        d.set(Double(fillOpacity), forKey: "fillOpacity")
+        d.set(HighlightConfig.colorToHex(borderColor), forKey: "borderColor")
+        d.set(Double(borderOpacity), forKey: "borderOpacity")
+        d.set(Double(borderWidth), forKey: "borderWidth")
+        d.set(clickEffect.rawValue, forKey: "clickEffect")
+        d.set(HighlightConfig.colorToHex(clickColor), forKey: "clickColor")
+        d.set(Double(clickOpacity), forKey: "clickOpacity")
+        d.set(showClickEffect, forKey: "showClickEffect")
+    }
+
+    static func load() -> HighlightConfig {
+        let c = HighlightConfig()
+        let d = defaults
+        guard d.object(forKey: "shape") != nil else { return c }
+
+        c.shape = HighlightShape(rawValue: d.integer(forKey: "shape")) ?? .circle
+        c.radius = CGFloat(d.double(forKey: "radius"))
+        if let hex = d.string(forKey: "fillColor"), let col = hexToColor(hex) { c.fillColor = col }
+        c.fillOpacity = CGFloat(d.double(forKey: "fillOpacity"))
+        if let hex = d.string(forKey: "borderColor"), let col = hexToColor(hex) { c.borderColor = col }
+        c.borderOpacity = CGFloat(d.double(forKey: "borderOpacity"))
+        c.borderWidth = CGFloat(d.double(forKey: "borderWidth"))
+        c.clickEffect = ClickEffect(rawValue: d.integer(forKey: "clickEffect")) ?? .colorChange
+        if let hex = d.string(forKey: "clickColor"), let col = hexToColor(hex) { c.clickColor = col }
+        c.clickOpacity = CGFloat(d.double(forKey: "clickOpacity"))
+        c.showClickEffect = d.bool(forKey: "showClickEffect")
+        return c
+    }
 }
 
 // MARK: - Presets
@@ -777,6 +833,7 @@ class ToolboxWindowController: NSObject, NSWindowDelegate {
         clickOpacityLabel.stringValue = String(format: "%.0f%%", config.clickOpacity * 100)
 
         previewView.updatePreview(config: config)
+        config.save()
         onConfigChanged?(config)
     }
 
@@ -790,6 +847,7 @@ class ToolboxWindowController: NSObject, NSWindowDelegate {
         if idx > 0 {
             presets[idx - 1].apply(config)
             syncControlsFromConfig()
+            config.save()
             onConfigChanged?(config)
         }
     }
@@ -818,7 +876,8 @@ class StatusBarManager: NSObject {
 
         let menu = NSMenu()
 
-        let toggleItem = NSMenuItem(title: "Toggle Highlight", action: #selector(toggleHighlight), keyEquivalent: "h")
+        let toggleItem = NSMenuItem(title: "Toggle Highlight", action: #selector(toggleHighlight), keyEquivalent: "t")
+        toggleItem.keyEquivalentModifierMask = [.control, .shift]
         toggleItem.target = self
         menu.addItem(toggleItem)
 
@@ -870,7 +929,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusBarManager: StatusBarManager!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let config = HighlightConfig()
+        let config = HighlightConfig.load()
         controller = HighlightWindowController(config: config)
         statusBarManager = StatusBarManager(controller: controller)
         controller.start()
