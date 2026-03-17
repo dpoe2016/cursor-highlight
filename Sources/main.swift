@@ -1,4 +1,5 @@
 import Cocoa
+import Carbon
 
 // MARK: - Enums
 
@@ -866,6 +867,31 @@ class StatusBarManager: NSObject {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
         setupMenu()
+        registerGlobalHotkey()
+    }
+
+    func registerGlobalHotkey() {
+        // Use Carbon hotkey API for reliable global shortcut
+        let hotKeyID = EventHotKeyID(signature: OSType(0x4348_4C54), id: 1) // "CHLT"
+        var hotKeyRef: EventHotKeyRef?
+
+        // Ctrl+Shift+T: kVK_ANSI_T = 0x11, controlKey = 0x1000, shiftKey = 0x0200
+        let modifiers: UInt32 = UInt32(controlKey | shiftKey)
+        RegisterEventHotKey(UInt32(0x11), modifiers, hotKeyID,
+                            GetApplicationEventTarget(), 0, &hotKeyRef)
+
+        var eventSpec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                      eventKind: UInt32(kEventHotKeyPressed))
+
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, refcon -> OSStatus in
+            guard let refcon = refcon else { return OSStatus(eventNotHandledErr) }
+            let mgr = Unmanaged<StatusBarManager>.fromOpaque(refcon).takeUnretainedValue()
+            DispatchQueue.main.async {
+                mgr.toggleHighlight()
+            }
+            return noErr
+        }, 1, &eventSpec, refcon, nil)
     }
 
     func setupMenu() {
