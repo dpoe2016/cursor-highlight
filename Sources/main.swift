@@ -431,6 +431,7 @@ class HighlightWindowController {
     var dragOrigin: CGPoint? = nil
     var isDragging = false
     var rectVisible = false
+    var isActive = true
 
     init(config: HighlightConfig) {
         self.config = config
@@ -513,14 +514,14 @@ class HighlightWindowController {
         RunLoop.current.add(trackingTimer!, forMode: .common)
 
         NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
-            guard let self = self else { return }
+            guard let self = self, self.isActive else { return }
             self.animateClick()
             self.dragOrigin = NSEvent.mouseLocation
             self.isDragging = true
             self.clearRect()
         }
         NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
-            guard let self = self else { return }
+            guard let self = self, self.isActive else { return }
             self.animateRelease()
             if self.isDragging {
                 self.isDragging = false
@@ -1065,8 +1066,13 @@ class StatusBarManager: NSObject {
     @objc func toggleHighlight() {
         isVisible.toggle()
         if isVisible {
+            controller.isActive = true
             controller.window.orderFront(nil)
         } else {
+            controller.isActive = false
+            controller.clearRect()
+            controller.isDragging = false
+            controller.dragOrigin = nil
             controller.window.orderOut(nil)
         }
     }
