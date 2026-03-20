@@ -96,6 +96,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Cursor Highlight needs access to your Desktop to save click snapshots and reports.</string>
 </dict>
 </plist>
 PLIST

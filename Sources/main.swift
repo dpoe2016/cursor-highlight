@@ -230,9 +230,9 @@ class SnapshotManager {
     }()
 
     func startSession() {
-        let baseDir = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first!
         let sessionName = "CursorHighlight_\(fileDateFormatter.string(from: Date()))"
-        sessionDir = baseDir.appendingPathComponent(sessionName)
+        let desktopDir = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first!
+        sessionDir = desktopDir.appendingPathComponent(sessionName)
         try? FileManager.default.createDirectory(at: sessionDir!, withIntermediateDirectories: true)
         snapshots = []
         isRecording = true
@@ -251,36 +251,47 @@ class SnapshotManager {
         let filePath = sessionDir.appendingPathComponent(fileName)
         let timestamp = Date()
 
+        // Find the screen containing the cursor (NSScreen coords)
+        let screen = NSScreen.screens.first(where: { $0.frame.contains(position) }) ?? NSScreen.main!
+        // Convert NSScreen frame to CGWindowList coordinates (origin top-left)
+        let mainHeight = NSScreen.screens.map { $0.frame.maxY }.max() ?? 0
+        let captureRect = CGRect(
+            x: screen.frame.origin.x,
+            y: mainHeight - screen.frame.maxY,
+            width: screen.frame.width,
+            height: screen.frame.height
+        )
+
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
             Thread.sleep(forTimeInterval: 0.05)
 
-            guard let screenshot = CGWindowListCreateImage(
-                CGRect.null,
+            var hasImage = false
+            if let screenshot = CGWindowListCreateImage(
+                captureRect,
                 .optionOnScreenOnly,
                 kCGNullWindowID,
                 [.bestResolution]
-            ) else {
+            ) {
+                let bitmapRep = NSBitmapImageRep(cgImage: screenshot)
+                if let pngData = bitmapRep.representation(using: .png, properties: [:]) {
+                    do {
+                        try pngData.write(to: filePath)
+                        hasImage = true
+                    } catch {
+                        NSLog("CursorHighlight: Failed to write snapshot: \(error)")
+                    }
+                }
+            } else {
                 NSLog("CursorHighlight: Screenshot capture failed — check Screen Recording permission")
-                return
-            }
-
-            let bitmapRep = NSBitmapImageRep(cgImage: screenshot)
-            guard let pngData = bitmapRep.representation(using: .png, properties: [:]) else { return }
-
-            do {
-                try pngData.write(to: filePath)
-            } catch {
-                NSLog("CursorHighlight: Failed to write snapshot: \(error)")
-                return
             }
 
             let snapshot = ClickSnapshot(
                 stepNumber: stepNumber,
                 timestamp: timestamp,
                 cursorPosition: position,
-                imagePath: filePath.path
+                imagePath: hasImage ? filePath.path : ""
             )
 
             DispatchQueue.main.async {
@@ -290,8 +301,13 @@ class SnapshotManager {
         }
     }
 
+    var lastReportError: String = ""
+
     func generateReport() -> URL? {
-        guard let sessionDir = sessionDir, !snapshots.isEmpty else { return nil }
+        guard let sessionDir = sessionDir, !snapshots.isEmpty else {
+            lastReportError = "sessionDir=\(sessionDir?.path ?? "nil"), snapshots=\(snapshots.count)"
+            return nil
+        }
 
         let reportPath = sessionDir.appendingPathComponent("report.html")
         let sessionDate = fileDateFormatter.string(from: snapshots.first?.timestamp ?? Date())
@@ -346,7 +362,20 @@ class SnapshotManager {
 
         for snapshot in snapshots {
             let timeStr = dateFormatter.string(from: snapshot.timestamp)
-            let fileName = URL(fileURLWithPath: snapshot.imagePath).lastPathComponent
+
+            var imgHtml: String
+            if !snapshot.imagePath.isEmpty, FileManager.default.fileExists(atPath: snapshot.imagePath) {
+                let fileName = URL(fileURLWithPath: snapshot.imagePath).lastPathComponent
+                imgHtml = """
+                    <div class="step-img-container">
+                        <img class="step-img" src="\(fileName)" alt="Step \(snapshot.stepNumber)">
+                    </div>
+                """
+            } else {
+                imgHtml = """
+                    <div style="padding:40px;text-align:center;color:#666;font-style:italic;">Screenshot unavailable — Screen Recording permission required</div>
+                """
+            }
 
             html += """
             <div class="step">
@@ -357,9 +386,7 @@ class SnapshotManager {
                         <div class="step-pos">Cursor: (\(Int(snapshot.cursorPosition.x)), \(Int(snapshot.cursorPosition.y)))</div>
                     </div>
                 </div>
-                <div class="step-img-container">
-                    <img class="step-img" src="\(fileName)" alt="Step \(snapshot.stepNumber)">
-                </div>
+                \(imgHtml)
             </div>
             """
         }
@@ -369,7 +396,12 @@ class SnapshotManager {
         </html>
         """
 
-        try? html.write(to: reportPath, atomically: true, encoding: .utf8)
+        do {
+            try html.write(to: reportPath, atomically: true, encoding: .utf8)
+        } catch {
+            lastReportError = "Write failed: \(error.localizedDescription)\nPath: \(reportPath.path)"
+            return nil
+        }
         return reportPath
     }
 
@@ -1205,16 +1237,18 @@ class ToolboxWindowController: NSObject, NSWindowDelegate {
 
         // Buttons row
         y -= 34
-        generateReportButton = NSButton(title: "Generate Report", target: self, action: #selector(generateReport))
-        generateReportButton.frame = NSRect(x: 20, y: y, width: 165, height: 28)
+        generateReportButton = NSButton(frame: NSRect(x: 20, y: y, width: 165, height: 28))
+        generateReportButton.title = "Generate Report"
         generateReportButton.bezelStyle = .rounded
-        generateReportButton.isEnabled = false
+        generateReportButton.target = self
+        generateReportButton.action = #selector(onGenerateReport)
         contentView.addSubview(generateReportButton)
 
-        clearSnapshotsButton = NSButton(title: "Clear Snapshots", target: self, action: #selector(clearSnapshots))
-        clearSnapshotsButton.frame = NSRect(x: 195, y: y, width: 165, height: 28)
+        clearSnapshotsButton = NSButton(frame: NSRect(x: 195, y: y, width: 165, height: 28))
+        clearSnapshotsButton.title = "Clear Snapshots"
         clearSnapshotsButton.bezelStyle = .rounded
-        clearSnapshotsButton.isEnabled = false
+        clearSnapshotsButton.target = self
+        clearSnapshotsButton.action = #selector(onClearSnapshots)
         contentView.addSubview(clearSnapshotsButton)
     }
 
@@ -1317,20 +1351,46 @@ class ToolboxWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    @objc func generateReport(_ sender: Any?) {
-        guard let mgr = highlightController?.snapshotManager else { return }
-        if let reportURL = mgr.generateReport() {
-            NSWorkspace.shared.open(reportURL)
+    @objc func onGenerateReport(_ sender: Any?) {
+        guard let mgr = highlightController?.snapshotManager else {
+            let alert = NSAlert()
+            alert.messageText = "No recording session"
+            alert.informativeText = "Enable 'Record click snapshots' first."
+            alert.runModal()
+            return
         }
+
+        let count = mgr.snapshots.count
+        let dir = mgr.sessionDir?.path ?? "nil"
+
+        if mgr.snapshots.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = "No snapshots recorded"
+            alert.informativeText = "Snapshots: \(count), sessionDir: \(dir)"
+            alert.runModal()
+            return
+        }
+
+        guard let reportURL = mgr.generateReport() else {
+            let alert = NSAlert()
+            alert.messageText = "Failed to generate report"
+            alert.informativeText = "Snapshots: \(count), sessionDir: \(dir)\nError: \(mgr.lastReportError)"
+            alert.runModal()
+            return
+        }
+
+        // Open via /usr/bin/open which is always reliable
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = [reportURL.path]
+        try? process.run()
     }
 
-    @objc func clearSnapshots(_ sender: Any?) {
+    @objc func onClearSnapshots(_ sender: Any?) {
         guard let mgr = highlightController?.snapshotManager else { return }
         mgr.clearSession()
         snapshotToggle.state = .off
         snapshotCountLabel.stringValue = "0 steps"
-        generateReportButton.isEnabled = false
-        clearSnapshotsButton.isEnabled = false
     }
 }
 
@@ -1447,9 +1507,24 @@ class StatusBarManager: NSObject {
 
     @objc func generateReport() {
         let mgr = controller.snapshotManager
-        if let reportURL = mgr.generateReport() {
-            NSWorkspace.shared.open(reportURL)
+        if mgr.snapshots.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = "No snapshots recorded"
+            alert.informativeText = "Start recording and click on the screen to capture steps first."
+            alert.runModal()
+            return
         }
+        guard let reportURL = mgr.generateReport() else {
+            let alert = NSAlert()
+            alert.messageText = "Failed to generate report"
+            alert.informativeText = "Snapshots: \(mgr.snapshots.count)\nsessionDir: \(mgr.sessionDir?.path ?? "nil")\nError: \(mgr.lastReportError)"
+            alert.runModal()
+            return
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = [reportURL.path]
+        try? process.run()
     }
 
     func updateRecordingMenuTitle() {
