@@ -11,6 +11,7 @@ enum HighlightShape: Int, CaseIterable {
     case diamond
     case target
     case glow
+    case rectangle
 
     var name: String {
         switch self {
@@ -21,6 +22,7 @@ enum HighlightShape: Int, CaseIterable {
         case .diamond:    return "Diamond"
         case .target:     return "Target"
         case .glow:       return "Glow"
+        case .rectangle:  return "Rectangle (Click)"
         }
     }
 }
@@ -55,6 +57,7 @@ class HighlightConfig {
     var clickColor: NSColor = NSColor.red
     var clickOpacity: CGFloat = 0.5
     var showClickEffect: Bool = true
+    var showRectangleOnMouseDown: Bool = false
 
     var effectiveFillColor: NSColor { fillColor.withAlphaComponent(fillOpacity) }
     var effectiveBorderColor: NSColor { borderColor.withAlphaComponent(borderOpacity) }
@@ -69,6 +72,7 @@ class HighlightConfig {
         c.borderWidth = borderWidth; c.clickEffect = clickEffect
         c.clickColor = clickColor; c.clickOpacity = clickOpacity
         c.showClickEffect = showClickEffect
+        c.showRectangleOnMouseDown = showRectangleOnMouseDown
         return c
     }
 
@@ -107,6 +111,7 @@ class HighlightConfig {
         d.set(HighlightConfig.colorToHex(clickColor), forKey: "clickColor")
         d.set(Double(clickOpacity), forKey: "clickOpacity")
         d.set(showClickEffect, forKey: "showClickEffect")
+        d.set(showRectangleOnMouseDown, forKey: "showRectangleOnMouseDown")
     }
 
     static func load() -> HighlightConfig {
@@ -125,6 +130,7 @@ class HighlightConfig {
         if let hex = d.string(forKey: "clickColor"), let col = hexToColor(hex) { c.clickColor = col }
         c.clickOpacity = CGFloat(d.double(forKey: "clickOpacity"))
         c.showClickEffect = d.bool(forKey: "showClickEffect")
+        c.showRectangleOnMouseDown = d.bool(forKey: "showRectangleOnMouseDown")
         return c
     }
 }
@@ -455,6 +461,18 @@ class HighlightView: NSView {
 
         case .glow:
             drawGlow(ctx: ctx, center: center, radius: r, color: fill)
+        
+        case .rectangle:
+            // Display a rectangle at the cursor position
+            let rectSize = r * 2
+            let rect = CGRect(x: center.x - rectSize/2, y: center.y - rectSize/2, width: rectSize, height: rectSize)
+            ctx.setFillColor(fill.cgColor)
+            ctx.fill(rect)
+            if bw > 0 {
+                ctx.setStrokeColor(stroke.cgColor)
+                ctx.setLineWidth(bw)
+                ctx.stroke(rect)
+            }
         }
 
         // Overlay click effects
