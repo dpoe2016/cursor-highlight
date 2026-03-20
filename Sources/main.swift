@@ -202,6 +202,188 @@ let presets: [Preset] = [
     },
 ]
 
+// MARK: - Snapshot Manager
+
+struct ClickSnapshot {
+    let stepNumber: Int
+    let timestamp: Date
+    let cursorPosition: CGPoint
+    let imagePath: String
+}
+
+class SnapshotManager {
+    var isRecording = false
+    var snapshots: [ClickSnapshot] = []
+    var sessionDir: URL?
+    var onSnapshotCountChanged: ((Int) -> Void)?
+
+    private let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss.SSS"
+        return f
+    }()
+
+    private let fileDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        return f
+    }()
+
+    func startSession() {
+        let baseDir = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first!
+        let sessionName = "CursorHighlight_\(fileDateFormatter.string(from: Date()))"
+        sessionDir = baseDir.appendingPathComponent(sessionName)
+        try? FileManager.default.createDirectory(at: sessionDir!, withIntermediateDirectories: true)
+        snapshots = []
+        isRecording = true
+        onSnapshotCountChanged?(0)
+    }
+
+    func stopSession() {
+        isRecording = false
+    }
+
+    func captureSnapshot(at position: CGPoint) {
+        guard isRecording, let sessionDir = sessionDir else { return }
+
+        let stepNumber = snapshots.count + 1
+        let fileName = String(format: "step_%03d.png", stepNumber)
+        let filePath = sessionDir.appendingPathComponent(fileName)
+        let timestamp = Date()
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+
+            Thread.sleep(forTimeInterval: 0.05)
+
+            guard let screenshot = CGWindowListCreateImage(
+                CGRect.null,
+                .optionOnScreenOnly,
+                kCGNullWindowID,
+                [.bestResolution]
+            ) else {
+                NSLog("CursorHighlight: Screenshot capture failed — check Screen Recording permission")
+                return
+            }
+
+            let bitmapRep = NSBitmapImageRep(cgImage: screenshot)
+            guard let pngData = bitmapRep.representation(using: .png, properties: [:]) else { return }
+
+            do {
+                try pngData.write(to: filePath)
+            } catch {
+                NSLog("CursorHighlight: Failed to write snapshot: \(error)")
+                return
+            }
+
+            let snapshot = ClickSnapshot(
+                stepNumber: stepNumber,
+                timestamp: timestamp,
+                cursorPosition: position,
+                imagePath: filePath.path
+            )
+
+            DispatchQueue.main.async {
+                self.snapshots.append(snapshot)
+                self.onSnapshotCountChanged?(self.snapshots.count)
+            }
+        }
+    }
+
+    func generateReport() -> URL? {
+        guard let sessionDir = sessionDir, !snapshots.isEmpty else { return nil }
+
+        let reportPath = sessionDir.appendingPathComponent("report.html")
+        let sessionDate = fileDateFormatter.string(from: snapshots.first?.timestamp ?? Date())
+
+        var html = """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Click Steps Report - \(sessionDate)</title>
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 40px; }
+            h1 { text-align: center; font-size: 28px; margin-bottom: 8px; color: #fff; }
+            .subtitle { text-align: center; color: #888; margin-bottom: 40px; font-size: 14px; }
+            .summary { display: flex; justify-content: center; gap: 40px; margin-bottom: 40px; }
+            .summary-item { text-align: center; }
+            .summary-item .value { font-size: 32px; font-weight: 700; color: #4fc3f7; }
+            .summary-item .label { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+            .step { background: #16213e; border-radius: 12px; margin-bottom: 24px; overflow: hidden; border: 1px solid #1a1a40; }
+            .step-header { display: flex; align-items: center; padding: 16px 24px; gap: 20px; border-bottom: 1px solid #1a1a40; }
+            .step-number { background: #4fc3f7; color: #1a1a2e; font-weight: 700; font-size: 14px; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+            .step-meta { flex: 1; }
+            .step-time { font-size: 16px; font-weight: 600; }
+            .step-pos { font-size: 12px; color: #888; margin-top: 2px; }
+            .step-img { width: 100%; display: block; cursor: pointer; transition: transform 0.2s; }
+            .step-img:hover { transform: scale(1.01); }
+            .step-img-container { position: relative; }
+            .cursor-dot { position: absolute; width: 12px; height: 12px; background: #ff4444; border: 2px solid #fff; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; box-shadow: 0 0 8px rgba(255,68,68,0.6); }
+        </style>
+        </head>
+        <body>
+        <h1>Click Steps Report</h1>
+        <p class="subtitle">Generated by Cursor Highlight</p>
+        <div class="summary">
+            <div class="summary-item"><div class="value">\(snapshots.count)</div><div class="label">Total Steps</div></div>
+        """
+
+        if let first = snapshots.first, let last = snapshots.last {
+            let duration = last.timestamp.timeIntervalSince(first.timestamp)
+            let mins = Int(duration) / 60
+            let secs = Int(duration) % 60
+            html += """
+                <div class="summary-item"><div class="value">\(mins)m \(secs)s</div><div class="label">Duration</div></div>
+            """
+        }
+
+        html += """
+        </div>
+        """
+
+        for snapshot in snapshots {
+            let timeStr = dateFormatter.string(from: snapshot.timestamp)
+            let fileName = URL(fileURLWithPath: snapshot.imagePath).lastPathComponent
+
+            html += """
+            <div class="step">
+                <div class="step-header">
+                    <div class="step-number">\(snapshot.stepNumber)</div>
+                    <div class="step-meta">
+                        <div class="step-time">\(timeStr)</div>
+                        <div class="step-pos">Cursor: (\(Int(snapshot.cursorPosition.x)), \(Int(snapshot.cursorPosition.y)))</div>
+                    </div>
+                </div>
+                <div class="step-img-container">
+                    <img class="step-img" src="\(fileName)" alt="Step \(snapshot.stepNumber)">
+                </div>
+            </div>
+            """
+        }
+
+        html += """
+        </body>
+        </html>
+        """
+
+        try? html.write(to: reportPath, atomically: true, encoding: .utf8)
+        return reportPath
+    }
+
+    func clearSession() {
+        if let sessionDir = sessionDir {
+            try? FileManager.default.removeItem(at: sessionDir)
+        }
+        snapshots = []
+        sessionDir = nil
+        isRecording = false
+        onSnapshotCountChanged?(0)
+    }
+}
+
 // MARK: - Highlight View (Drawing)
 
 class HighlightView: NSView {
@@ -432,6 +614,8 @@ class HighlightWindowController {
     var isDragging = false
     var rectVisible = false
     var isActive = true
+    var eventTap: CFMachPort?
+    var snapshotManager = SnapshotManager()
 
     init(config: HighlightConfig) {
         self.config = config
@@ -513,31 +697,110 @@ class HighlightWindowController {
         }
         RunLoop.current.add(trackingTimer!, forMode: .common)
 
-        NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
-            guard let self = self, self.isActive else { return }
-            self.animateClick()
-            self.dragOrigin = NSEvent.mouseLocation
-            self.isDragging = true
-            self.clearRect()
-        }
-        NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
-            guard let self = self, self.isActive else { return }
-            self.animateRelease()
-            if self.isDragging {
-                self.isDragging = false
-                if let origin = self.dragOrigin {
-                    let pos = NSEvent.mouseLocation
-                    if abs(pos.x - origin.x) < 5 && abs(pos.y - origin.y) < 5 {
-                        self.clearRect()
-                    }
-                }
-            }
-        }
+        setupEventTap()
+
         NSEvent.addGlobalMonitorForEvents(matching: [.rightMouseDown]) { [weak self] _ in
             self?.clearRect()
             self?.isDragging = false
             self?.dragOrigin = nil
         }
+    }
+
+    func setupEventTap() {
+        let eventMask: CGEventMask = (1 << CGEventType.leftMouseDown.rawValue)
+            | (1 << CGEventType.leftMouseUp.rawValue)
+            | (1 << CGEventType.leftMouseDragged.rawValue)
+
+        let controller = Unmanaged.passUnretained(self)
+
+        guard let tap = CGEvent.tapCreate(
+            tap: .cghidEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap, // active tap — can modify/suppress events
+            eventsOfInterest: eventMask,
+            callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
+                guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
+                let ctrl = Unmanaged<HighlightWindowController>.fromOpaque(refcon).takeUnretainedValue()
+
+                // If the tap gets disabled by the system, re-enable it
+                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    if let tap = ctrl.eventTap {
+                        CGEvent.tapEnable(tap: tap, enable: true)
+                    }
+                    return Unmanaged.passUnretained(event)
+                }
+
+                guard ctrl.isActive else { return Unmanaged.passUnretained(event) }
+
+                switch type {
+                case .leftMouseDown:
+                    ctrl.animateClick()
+                    ctrl.dragOrigin = NSEvent.mouseLocation
+                    ctrl.isDragging = true
+                    ctrl.clearRect()
+                    // Pass through the initial click
+                    return Unmanaged.passUnretained(event)
+
+                case .leftMouseUp:
+                    ctrl.animateRelease()
+                    let wasDraggingRect = ctrl.isDragging && ctrl.rectVisible
+                    if ctrl.isDragging {
+                        ctrl.isDragging = false
+                        if let origin = ctrl.dragOrigin {
+                            let pos = NSEvent.mouseLocation
+                            if abs(pos.x - origin.x) < 5 && abs(pos.y - origin.y) < 5 {
+                                ctrl.clearRect()
+                            }
+                        }
+                    }
+                    // Suppress mouse-up if we were drawing a rectangle
+                    if wasDraggingRect {
+                        return nil
+                    }
+                    return Unmanaged.passUnretained(event)
+
+                case .leftMouseDragged:
+                    // Suppress drag events while drawing a selection rectangle
+                    if ctrl.isDragging && ctrl.rectVisible {
+                        return nil
+                    }
+                    return Unmanaged.passUnretained(event)
+
+                default:
+                    return Unmanaged.passUnretained(event)
+                }
+            },
+            userInfo: controller.toOpaque()
+        ) else {
+            // Fallback: if event tap fails (no Accessibility permission), use global monitors
+            NSLog("CursorHighlight: CGEvent tap failed — falling back to global monitors (text selection during drag won't be suppressed). Grant Accessibility permission in System Settings to enable suppression.")
+            NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
+                guard let self = self, self.isActive else { return }
+                self.animateClick()
+                self.dragOrigin = NSEvent.mouseLocation
+                self.isDragging = true
+                self.clearRect()
+            }
+            NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
+                guard let self = self, self.isActive else { return }
+                self.animateRelease()
+                if self.isDragging {
+                    self.isDragging = false
+                    if let origin = self.dragOrigin {
+                        let pos = NSEvent.mouseLocation
+                        if abs(pos.x - origin.x) < 5 && abs(pos.y - origin.y) < 5 {
+                            self.clearRect()
+                        }
+                    }
+                }
+            }
+            return
+        }
+
+        self.eventTap = tap
+        let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
     }
 
     func tick() {
@@ -625,6 +888,11 @@ class HighlightWindowController {
         highlightView.ripplePhase = 0
         highlightView.needsDisplay = true
 
+        // Capture snapshot if recording
+        if snapshotManager.isRecording {
+            snapshotManager.captureSnapshot(at: NSEvent.mouseLocation)
+        }
+
         if config.clickEffect == .pulse || config.clickEffect == .ripple {
             var elapsed: CGFloat = 0
             animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] timer in
@@ -707,12 +975,17 @@ class ToolboxWindowController: NSObject, NSWindowDelegate {
     var clickOpacityLabel: NSTextField!
     var presetPopup: NSPopUpButton!
     var previewView: PreviewView!
+    var snapshotToggle: NSButton!
+    var snapshotCountLabel: NSTextField!
+    var generateReportButton: NSButton!
+    var clearSnapshotsButton: NSButton!
+    weak var highlightController: HighlightWindowController?
 
     init(config: HighlightConfig) {
         self.config = config
 
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 620),
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 740),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -747,7 +1020,7 @@ class ToolboxWindowController: NSObject, NSWindowDelegate {
         contentView.autoresizingMask = [.width, .height]
         window.contentView = contentView
 
-        var y: CGFloat = 580
+        var y: CGFloat = 700
 
         // Preview
         let previewLabel = makeLabel("Preview", bold: true)
@@ -908,6 +1181,41 @@ class ToolboxWindowController: NSObject, NSWindowDelegate {
         contentView.addSubview(clickOpacitySlider)
         clickOpacityLabel = makeValueLabel(frame: NSRect(x: 325, y: y + 2, width: 40, height: 18))
         contentView.addSubview(clickOpacityLabel)
+
+        // Separator
+        y -= 20
+        contentView.addSubview(makeSeparator(y: y, width: 340))
+
+        // Snapshot Recording section header
+        y -= 22
+        let snapHeader = makeLabel("Snapshot Recording", bold: true)
+        snapHeader.frame.origin = CGPoint(x: 20, y: y)
+        contentView.addSubview(snapHeader)
+
+        // Record toggle + count
+        y -= 34
+        snapshotToggle = NSButton(checkboxWithTitle: "Record click snapshots", target: self, action: #selector(snapshotToggleChanged))
+        snapshotToggle.frame.origin = CGPoint(x: 20, y: y + 2)
+        snapshotToggle.sizeToFit()
+        contentView.addSubview(snapshotToggle)
+        snapshotCountLabel = makeValueLabel(frame: NSRect(x: 260, y: y + 2, width: 100, height: 18))
+        snapshotCountLabel.stringValue = "0 steps"
+        snapshotCountLabel.alignment = .right
+        contentView.addSubview(snapshotCountLabel)
+
+        // Buttons row
+        y -= 34
+        generateReportButton = NSButton(title: "Generate Report", target: self, action: #selector(generateReport))
+        generateReportButton.frame = NSRect(x: 20, y: y, width: 165, height: 28)
+        generateReportButton.bezelStyle = .rounded
+        generateReportButton.isEnabled = false
+        contentView.addSubview(generateReportButton)
+
+        clearSnapshotsButton = NSButton(title: "Clear Snapshots", target: self, action: #selector(clearSnapshots))
+        clearSnapshotsButton.frame = NSRect(x: 195, y: y, width: 165, height: 28)
+        clearSnapshotsButton.bezelStyle = .rounded
+        clearSnapshotsButton.isEnabled = false
+        contentView.addSubview(clearSnapshotsButton)
     }
 
     // MARK: Helpers
@@ -993,6 +1301,37 @@ class ToolboxWindowController: NSObject, NSWindowDelegate {
             onConfigChanged?(config)
         }
     }
+
+    @objc func snapshotToggleChanged(_ sender: Any?) {
+        guard let mgr = highlightController?.snapshotManager else { return }
+        if snapshotToggle.state == .on {
+            mgr.startSession()
+            mgr.onSnapshotCountChanged = { [weak self] count in
+                self?.snapshotCountLabel.stringValue = "\(count) step\(count == 1 ? "" : "s")"
+                self?.generateReportButton.isEnabled = count > 0
+                self?.clearSnapshotsButton.isEnabled = true
+            }
+        } else {
+            mgr.stopSession()
+            generateReportButton.isEnabled = !mgr.snapshots.isEmpty
+        }
+    }
+
+    @objc func generateReport(_ sender: Any?) {
+        guard let mgr = highlightController?.snapshotManager else { return }
+        if let reportURL = mgr.generateReport() {
+            NSWorkspace.shared.open(reportURL)
+        }
+    }
+
+    @objc func clearSnapshots(_ sender: Any?) {
+        guard let mgr = highlightController?.snapshotManager else { return }
+        mgr.clearSession()
+        snapshotToggle.state = .off
+        snapshotCountLabel.stringValue = "0 steps"
+        generateReportButton.isEnabled = false
+        clearSnapshotsButton.isEnabled = false
+    }
 }
 
 // MARK: - Status Bar Menu
@@ -1050,6 +1389,17 @@ class StatusBarManager: NSObject {
 
         menu.addItem(NSMenuItem.separator())
 
+        let recordItem = NSMenuItem(title: "Start Recording Clicks", action: #selector(toggleRecording), keyEquivalent: "r")
+        recordItem.keyEquivalentModifierMask = [.control, .shift]
+        recordItem.target = self
+        menu.addItem(recordItem)
+
+        let reportItem = NSMenuItem(title: "Generate Report", action: #selector(generateReport), keyEquivalent: "")
+        reportItem.target = self
+        menu.addItem(reportItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         let toolboxItem = NSMenuItem(title: "Toolbox...", action: #selector(openToolbox), keyEquivalent: ",")
         toolboxItem.target = self
         menu.addItem(toolboxItem)
@@ -1077,9 +1427,54 @@ class StatusBarManager: NSObject {
         }
     }
 
+    @objc func toggleRecording() {
+        let mgr = controller.snapshotManager
+        if mgr.isRecording {
+            mgr.stopSession()
+            updateRecordingMenuTitle()
+        } else {
+            mgr.startSession()
+            mgr.onSnapshotCountChanged = { [weak self] count in
+                self?.updateRecordingMenuTitle()
+            }
+            updateRecordingMenuTitle()
+        }
+        // Sync toolbox if open
+        if let tb = toolbox {
+            tb.snapshotToggle.state = mgr.isRecording ? .on : .off
+        }
+    }
+
+    @objc func generateReport() {
+        let mgr = controller.snapshotManager
+        if let reportURL = mgr.generateReport() {
+            NSWorkspace.shared.open(reportURL)
+        }
+    }
+
+    func updateRecordingMenuTitle() {
+        guard let menu = statusItem.menu else { return }
+        let mgr = controller.snapshotManager
+        // Recording item is at index 2 (after toggle + separator)
+        if menu.items.count > 2 {
+            let item = menu.items[2]
+            if mgr.isRecording {
+                let count = mgr.snapshots.count
+                item.title = "Stop Recording (\(count) step\(count == 1 ? "" : "s"))"
+            } else {
+                item.title = "Start Recording Clicks"
+            }
+        }
+        // Report item
+        if menu.items.count > 3 {
+            menu.items[3].isHidden = mgr.snapshots.isEmpty && !mgr.isRecording
+        }
+    }
+
     @objc func openToolbox() {
         if toolbox == nil {
             toolbox = ToolboxWindowController(config: controller.config)
+            toolbox?.highlightController = controller
             toolbox?.onConfigChanged = { [weak self] config in
                 guard let self = self else { return }
                 self.controller.config = config
