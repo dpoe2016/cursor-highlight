@@ -10,6 +10,8 @@ A lightweight native macOS menu bar app that draws a configurable highlight arou
 - **Toolbox UI** — Full settings window with live preview, accessible from the menu bar
 - **Customizable** — Shape, size, fill/border color, opacity, border width, click effect and color
 - **Persistent settings** — Toolbox changes are saved automatically and restored on next launch
+- **Selection rectangle** — Left-drag to draw a persistent rectangle overlay, right-click to clear
+- **Snapshot recording** — Record click steps as screenshots and generate an HTML report with cursor positions
 - **Global hotkey** — Toggle highlight with Ctrl+Shift+T from anywhere, no need to focus the app
 - **Lightweight** — Native Swift, no dependencies, runs as a menu bar app with no dock icon
 
@@ -48,15 +50,21 @@ swift build -c release
 1. Launch the app — a cursor icon appears in the menu bar
 2. Click the menu bar icon to access:
    - **Toggle Highlight** (Ctrl+Shift+T) — show/hide the highlight
+   - **Start Recording Clicks** — begin capturing click snapshots
+   - **Generate Report** — create an HTML report from recorded snapshots
    - **Toolbox...** — open the settings window
    - **Quit** — exit the app
 3. Use the Toolbox to customize shape, colors, size, and click effects — changes apply live and persist across restarts
+4. **Selection rectangle**: Left-drag anywhere to draw a rectangle overlay; right-click to clear it
+5. **Snapshot recording**: Enable in the Toolbox or menu bar, then click around — each click captures a screenshot. Generate a report to get an HTML page with all steps, cursor positions, and timestamps
 
 ### Keyboard Shortcuts
 
 | Shortcut | Action |
 |----------|--------|
 | Ctrl+Shift+T | Toggle highlight on/off (global, works from any app) |
+| Left-drag | Draw a selection rectangle |
+| Right-click | Clear selection rectangle |
 
 ## Presets
 
