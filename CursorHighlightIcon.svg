@@ -1,0 +1,15 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Cursor mit Highlight-Kreis -->
+  <g transform="translate(100, 100)">
+    <!-- Highlight-Kreis - zartes Leuchten -->
+    <circle cx="0" cy="0" r="38" fill="none" stroke="#4FC3F7" stroke-width="2.5" opacity="0.5"/>
+    <circle cx="0" cy="0" r="30" fill="none" stroke="#4FC3F7" stroke-width="2" opacity="0.8"/>
+    
+    <!-- Cursor-Zeiger -->
+    <path d="M 8 -20 L 20 -4 L 16 4 L 8 4 L 8 10 L 0 10 L 0 20 L -10 4 Z" 
+          fill="#212121" stroke="#4FC3F7" stroke-width="2" stroke-linejoin="round"/>
+    
+    <!-- Kleiner Punkt im Zentrum -->
+    <circle cx="0" cy="0" r="3" fill="#4FC3F7"/>
+  </g>
+</svg>

@@ -98,9 +98,22 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <true/>
     <key>NSDesktopFolderUsageDescription</key>
     <string>Cursor Highlight needs access to your Desktop to save click snapshots and reports.</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon.icns</string>
 </dict>
 </plist>
 PLIST
+
+# Copy icon to resources
+echo "Copying icon to Resources..."
+if [ -f "Assets.xcassets/AppIcon.appiconset/AppIcon.icns" ]; then
+    cp "Assets.xcassets/AppIcon.appiconset/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
+elif [ -f "build/Cursor Highlight.app/Contents/Resources/AppIcon.icns" ]; then
+    cp "build/Cursor Highlight.app/Contents/Resources/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
+else
+    # Use system icon as fallback
+    echo "No icon file found, using system default"
+fi
 
 echo "==> Signing app bundle with certificate '$CERT_NAME'..."
 codesign --force --sign "$CERT_NAME" --identifier "$BUNDLE_ID" --deep "$APP_DIR"
