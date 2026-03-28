@@ -11,7 +11,6 @@ enum HighlightShape: Int, CaseIterable {
     case diamond
     case target
     case glow
-    case rectangle
 
     var name: String {
         switch self {
@@ -22,7 +21,6 @@ enum HighlightShape: Int, CaseIterable {
         case .diamond:    return "Diamond"
         case .target:     return "Target"
         case .glow:       return "Glow"
-        case .rectangle:  return "Rectangle (Click)"
         }
     }
 }
@@ -57,7 +55,6 @@ class HighlightConfig {
     var clickColor: NSColor = NSColor.red
     var clickOpacity: CGFloat = 0.5
     var showClickEffect: Bool = true
-    var showRectangleOnMouseDown: Bool = false
 
     var effectiveFillColor: NSColor { fillColor.withAlphaComponent(fillOpacity) }
     var effectiveBorderColor: NSColor { borderColor.withAlphaComponent(borderOpacity) }
@@ -72,7 +69,6 @@ class HighlightConfig {
         c.borderWidth = borderWidth; c.clickEffect = clickEffect
         c.clickColor = clickColor; c.clickOpacity = clickOpacity
         c.showClickEffect = showClickEffect
-        c.showRectangleOnMouseDown = showRectangleOnMouseDown
         return c
     }
 
@@ -111,7 +107,6 @@ class HighlightConfig {
         d.set(HighlightConfig.colorToHex(clickColor), forKey: "clickColor")
         d.set(Double(clickOpacity), forKey: "clickOpacity")
         d.set(showClickEffect, forKey: "showClickEffect")
-        d.set(showRectangleOnMouseDown, forKey: "showRectangleOnMouseDown")
     }
 
     static func load() -> HighlightConfig {
@@ -130,7 +125,6 @@ class HighlightConfig {
         if let hex = d.string(forKey: "clickColor"), let col = hexToColor(hex) { c.clickColor = col }
         c.clickOpacity = CGFloat(d.double(forKey: "clickOpacity"))
         c.showClickEffect = d.bool(forKey: "showClickEffect")
-        c.showRectangleOnMouseDown = d.bool(forKey: "showRectangleOnMouseDown")
         return c
     }
 }
@@ -461,18 +455,6 @@ class HighlightView: NSView {
 
         case .glow:
             drawGlow(ctx: ctx, center: center, radius: r, color: fill)
-        
-        case .rectangle:
-            // Display a rectangle at the cursor position
-            let rectSize = r * 2
-            let rect = CGRect(x: center.x - rectSize/2, y: center.y - rectSize/2, width: rectSize, height: rectSize)
-            ctx.setFillColor(fill.cgColor)
-            ctx.fill(rect)
-            if bw > 0 {
-                ctx.setStrokeColor(stroke.cgColor)
-                ctx.setLineWidth(bw)
-                ctx.stroke(rect)
-            }
         }
 
         // Overlay click effects
@@ -652,17 +634,6 @@ class HighlightWindowController {
     var clickFadeTimer: Timer?
     var animationTimer: Timer?
 
-    // Selection rectangle
-    struct RectOverlay {
-        let window: NSWindow
-        let fillLayer: CAShapeLayer
-        let borderLayer: CAShapeLayer
-        let screenFrame: NSRect  // screen frame in global NS coords
-    }
-    var rectOverlays: [RectOverlay] = []
-    var dragOrigin: CGPoint? = nil
-    var isDragging = false
-    var rectVisible = false
     var isActive = true
     var eventTap: CFMachPort?
     var snapshotManager = SnapshotManager()
@@ -700,47 +671,9 @@ class HighlightWindowController {
         highlightView.needsDisplay = true
     }
 
-    private func setupRectWindows() {
-        for screen in NSScreen.screens {
-            let frame = screen.frame
-
-            let rw = NSWindow(
-                contentRect: frame,
-                styleMask: .borderless,
-                backing: .buffered,
-                defer: false
-            )
-            rw.isOpaque = false
-            rw.backgroundColor = .clear
-            rw.level = .screenSaver
-            rw.ignoresMouseEvents = true
-            rw.hasShadow = false
-            rw.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-            rw.setFrame(frame, display: false)
-
-            let cv = NSView(frame: NSRect(origin: .zero, size: frame.size))
-            cv.wantsLayer = true
-            rw.contentView = cv
-
-            let fill = CAShapeLayer()
-            fill.fillColor = NSColor.systemBlue.withAlphaComponent(0.15).cgColor
-            fill.strokeColor = nil
-            cv.layer?.addSublayer(fill)
-
-            let border = CAShapeLayer()
-            border.fillColor = nil
-            border.strokeColor = NSColor.systemBlue.withAlphaComponent(0.8).cgColor
-            border.lineWidth = 2.0
-            cv.layer?.addSublayer(border)
-
-            rectOverlays.append(RectOverlay(window: rw, fillLayer: fill, borderLayer: border, screenFrame: frame))
-        }
-    }
-
     func start() {
         window.orderFront(nil)
         updatePosition()
-        setupRectWindows()
 
         trackingTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             self?.tick()
@@ -748,18 +681,11 @@ class HighlightWindowController {
         RunLoop.current.add(trackingTimer!, forMode: .common)
 
         setupEventTap()
-
-        NSEvent.addGlobalMonitorForEvents(matching: [.rightMouseDown]) { [weak self] _ in
-            self?.clearRect()
-            self?.isDragging = false
-            self?.dragOrigin = nil
-        }
     }
 
     func setupEventTap() {
         let eventMask: CGEventMask = (1 << CGEventType.leftMouseDown.rawValue)
             | (1 << CGEventType.leftMouseUp.rawValue)
-            | (1 << CGEventType.leftMouseDragged.rawValue)
 
         let controller = Unmanaged.passUnretained(self)
 
@@ -782,67 +708,24 @@ class HighlightWindowController {
 
                 guard ctrl.isActive else { return Unmanaged.passUnretained(event) }
 
-                switch type {
-                case .leftMouseDown:
+                if type == .leftMouseDown {
                     ctrl.animateClick()
-                    ctrl.dragOrigin = NSEvent.mouseLocation
-                    ctrl.isDragging = true
-                    ctrl.clearRect()
-                    // Pass through the initial click
-                    return Unmanaged.passUnretained(event)
-
-                case .leftMouseUp:
+                } else if type == .leftMouseUp {
                     ctrl.animateRelease()
-                    let wasDraggingRect = ctrl.isDragging && ctrl.rectVisible
-                    if ctrl.isDragging {
-                        ctrl.isDragging = false
-                        if let origin = ctrl.dragOrigin {
-                            let pos = NSEvent.mouseLocation
-                            if abs(pos.x - origin.x) < 5 && abs(pos.y - origin.y) < 5 {
-                                ctrl.clearRect()
-                            }
-                        }
-                    }
-                    // Suppress mouse-up if we were drawing a rectangle
-                    if wasDraggingRect {
-                        return nil
-                    }
-                    return Unmanaged.passUnretained(event)
-
-                case .leftMouseDragged:
-                    // Suppress drag events while drawing a selection rectangle
-                    if ctrl.isDragging && ctrl.rectVisible {
-                        return nil
-                    }
-                    return Unmanaged.passUnretained(event)
-
-                default:
-                    return Unmanaged.passUnretained(event)
                 }
+
+                return Unmanaged.passUnretained(event)
             },
             userInfo: controller.toOpaque()
         ) else {
-            // Fallback: if event tap fails (no Accessibility permission), use global monitors
-            NSLog("CursorHighlight: CGEvent tap failed — falling back to global monitors (text selection during drag won't be suppressed). Grant Accessibility permission in System Settings to enable suppression.")
+            // Fallback: if event tap fails, use global monitors
             NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
                 guard let self = self, self.isActive else { return }
                 self.animateClick()
-                self.dragOrigin = NSEvent.mouseLocation
-                self.isDragging = true
-                self.clearRect()
             }
             NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
                 guard let self = self, self.isActive else { return }
                 self.animateRelease()
-                if self.isDragging {
-                    self.isDragging = false
-                    if let origin = self.dragOrigin {
-                        let pos = NSEvent.mouseLocation
-                        if abs(pos.x - origin.x) < 5 && abs(pos.y - origin.y) < 5 {
-                            self.clearRect()
-                        }
-                    }
-                }
             }
             return
         }
@@ -855,7 +738,6 @@ class HighlightWindowController {
 
     func tick() {
         updatePosition()
-        updateRect()
     }
 
     func updatePosition() {
@@ -863,71 +745,6 @@ class HighlightWindowController {
         let size = config.windowSize
         let origin = CGPoint(x: mouseLocation.x - size / 2, y: mouseLocation.y - size / 2)
         window.setFrameOrigin(origin)
-    }
-
-    func updateRect() {
-        guard isDragging, let origin = dragOrigin else { return }
-
-        // Double-check left button is still held
-        if NSEvent.pressedMouseButtons & 1 == 0 {
-            isDragging = false
-            return
-        }
-
-        let pos = NSEvent.mouseLocation
-        let w = abs(pos.x - origin.x)
-        let h = abs(pos.y - origin.y)
-        guard w > 3 || h > 3 else { return }
-
-        // The selection rectangle in screen coordinates
-        let selectionRect = NSRect(
-            x: min(origin.x, pos.x),
-            y: min(origin.y, pos.y),
-            width: w,
-            height: h
-        )
-
-        if !rectVisible {
-            for overlay in rectOverlays {
-                overlay.window.orderFront(nil)
-            }
-            rectVisible = true
-        }
-
-        for overlay in rectOverlays {
-            let sf = overlay.screenFrame
-            let intersection = selectionRect.intersection(sf)
-
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            if !intersection.isNull && intersection.width > 0 && intersection.height > 0 {
-                let localRect = NSRect(
-                    x: intersection.origin.x - sf.origin.x,
-                    y: intersection.origin.y - sf.origin.y,
-                    width: intersection.width,
-                    height: intersection.height
-                )
-                let path = CGPath(rect: localRect, transform: nil)
-                overlay.fillLayer.path = path
-                overlay.borderLayer.path = path
-            } else {
-                overlay.fillLayer.path = nil
-                overlay.borderLayer.path = nil
-            }
-            CATransaction.commit()
-        }
-    }
-
-    func clearRect() {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        for overlay in rectOverlays {
-            overlay.fillLayer.path = nil
-            overlay.borderLayer.path = nil
-            overlay.window.orderOut(nil)
-        }
-        CATransaction.commit()
-        rectVisible = false
     }
 
     func animateClick() {
@@ -967,6 +784,7 @@ class HighlightWindowController {
             self?.highlightView.clickAnimationProgress = 0
             self?.highlightView.needsDisplay = true
         }
+        RunLoop.current.add(clickFadeTimer!, forMode: .common)
     }
 }
 
@@ -1498,9 +1316,6 @@ class StatusBarManager: NSObject {
             controller.window.orderFront(nil)
         } else {
             controller.isActive = false
-            controller.clearRect()
-            controller.isDragging = false
-            controller.dragOrigin = nil
             controller.window.orderOut(nil)
         }
     }
